@@ -425,6 +425,11 @@ def reset_app():
     _last_full_tick_market_refresh_at = 0.0
     _adjust_tick_stats.update({"last_ts": 0.0, "count": 0, "window_start": 0.0, "sum": 0.0, "min": 0.0, "max": 0.0})
     if _rpc_service is not None:
+        handlers = getattr(_rpc_service, "handlers", None)
+        for store in (getattr(handlers, "_order_identity_journals", {}) or {}).values():
+            close = getattr(store, "close", None)
+            if close is not None:
+                close()
         try:
             _rpc_service.stop()
         except Exception:
@@ -754,6 +759,7 @@ def _build_rpc_service(context_info, app, config):
         "bigqmt_signal_trader.download_jobs",
         "bigqmt_signal_trader.order_remarks",
         "bigqmt_signal_trader.order_identity_journal",
+        "bigqmt_signal_trader.order_identity_pipe",
         "bigqmt_signal_trader.exec_events",
     ):
         try:
@@ -856,7 +862,8 @@ def _build_rpc_service(context_info, app, config):
         # Pipe and other Redis-free transports need a durable source after a
         # real strategy/process restart, when the in-memory journal is gone.
         handlers.enable_order_identity_persistence(
-            directory=rpc_config.get("order_identity_dir"))
+            directory=rpc_config.get("order_identity_dir"),
+            pipe_config=rpc_config.get("order_identity_pipe"))
     # Settlement reads the callback-fed watch table first (issue #164).
     handlers.order_watch_table = _order_watch_table
     # Whether _pump_download_jobs will actually run queued jobs. The submit RPC

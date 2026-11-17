@@ -1897,12 +1897,13 @@ class BigQmtRpcHandlers:
     # renamed under the bridge process (#393).
     _ORDER_IDENTITY_LOCAL_TTL_SECONDS = 7 * 86400.0
 
-    def enable_order_identity_persistence(self, directory=None, account_types=None):
+    def enable_order_identity_persistence(self, directory=None, account_types=None, pipe_config=None):
         """Restore Redis-free attribution before the RPC service starts."""
         from .account_type_map import get_account_type_map, primary_account_type
 
         self._order_identity_journals = {}
         self._order_identity_journal_directory = directory
+        self._order_identity_pipe_config = pipe_config
         if account_types is None:
             account_types = dict(get_account_type_map())
         account_types = dict(account_types)
@@ -1912,21 +1913,34 @@ class BigQmtRpcHandlers:
                 account_id, primary_account_type(account_types[account_id]))
 
     def _load_order_identity_journal(self, account_id, account_type=None):
+        from .order_identity_pipe import IdentityPersistenceError
+
         stores = getattr(self, "_order_identity_journals", None)
         if stores is None:
             return None
         account_id = str(account_id or "")
         if account_id in stores:
             return stores[account_id]
-        store = _identity_journal.OrderIdentityJournal(
+        factory = _identity_journal.OrderIdentityJournal
+        options = dict(directory=self._order_identity_journal_directory)
+        pipe_config = getattr(self, "_order_identity_pipe_config", None)
+        if pipe_config is not None:
+            from .order_identity_pipe import PipeIdentityJournal
+            factory = PipeIdentityJournal
+            options = dict(pipe_config)
+        store = factory(
             account_id,
             self._configured_account_type(account_id) if account_type is None else account_type,
-            directory=self._order_identity_journal_directory,
             ttl_seconds=self._ORDER_IDENTITY_LOCAL_TTL_SECONDS,
-            limit=self._ORDER_IDENTITY_LOCAL_LIMIT)
+            limit=self._ORDER_IDENTITY_LOCAL_LIMIT, **options)
+        try:
+            recovered = store.load()
+        except IdentityPersistenceError:
+            store.close()
+            raise
         stores[account_id] = store
         journal = self._order_identity_local
-        for key, entry in store.load().items():
+        for key, entry in recovered.items():
             existing = journal.get(key)
             if existing is None or (entry[1] and not existing[1]):
                 journal[key] = entry
@@ -1935,8 +1949,12 @@ class BigQmtRpcHandlers:
         return store
 
     def _remember_order_identity_local(self, account_id, remark, strategy_name):
+        from .order_identity_pipe import IdentityPersistenceError
+
         remark = str(remark or "").strip()
         if not remark:
+            if getattr(self, "_order_identity_pipe_config", None) is not None:
+                raise IdentityPersistenceError("external persistence requires a unique order remark")
             return
         key = (str(account_id or ""), remark)
         try:
@@ -1949,6 +1967,9 @@ class BigQmtRpcHandlers:
             name = str(strategy_name or "")
             existing = journal.get(key)
             now = time.time()
+            if store is not None and getattr(store, "required", False):
+                saved = store.remember(account_id, remark, now, name)
+                now, name = saved["ts"], saved["strategy_name"]
             if existing is not None and now - existing[0] <= self._ORDER_IDENTITY_LOCAL_TTL_SECONDS:
                 existing_name = existing[1]
                 if existing_name and existing_name != name:
@@ -1968,9 +1989,13 @@ class BigQmtRpcHandlers:
             journal.move_to_end(key)
             while len(journal) > self._ORDER_IDENTITY_LOCAL_LIMIT:
                 journal.popitem(last=False)
-            if store is not None:
+            if store is not None and not getattr(store, "required", False):
                 store.remember(account_id, remark, now, name)
-        except Exception:
+        except IdentityPersistenceError:
+            raise
+        except Exception as exc:
+            if getattr(self, "_order_identity_pipe_config", None) is not None:
+                raise IdentityPersistenceError(str(exc))
             pass
 
     def _handle_describe_trade_detail_fields(self, params):

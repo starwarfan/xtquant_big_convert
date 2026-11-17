@@ -391,6 +391,11 @@ def _redis_block():
     }
 
 
+ORDER_IDENTITY_CONFIG = {key: BIGQMT_REDIS_CONFIG[key] for key in
+                         ("order_identity_dir", "order_identity_pipe")
+                         if key in BIGQMT_REDIS_CONFIG}
+
+
 def _apply_config(account_id):
     account_id = str(account_id or "")
     if account_id:
@@ -422,6 +427,7 @@ def _apply_config(account_id):
                                   if RPC_NATIVE_XTDATA_ENABLED is not None
                                   else RPC_TRANSPORT != "pipe"),
     }
+    rpc_block.update(ORDER_IDENTITY_CONFIG)
     # Forward order_settle_timeout_seconds ONLY when the local config named
     # it (#396 follow-up): the strategy/handlers default (3.0s) owns the unset
     # case, and forwarding None would crash its float() -- the chain used to
@@ -477,8 +483,12 @@ def configure_runtime_account(account_id):
 
 
 def configure_runtime_redis(redis_config):
+    global ORDER_IDENTITY_CONFIG
     global REDIS_ENABLED, REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_USERNAME, REDIS_PASSWORD, RPC_ALLOW_ORDER_METHODS, RPC_DEFAULT_STRATEGY_NAME, RPC_PROCESS_IN_LISTENER, RPC_BACKGROUND_THREADS, RPC_LISTENER_METHODS, SCHEDULE_ADJUST_ENABLED, SCHEDULE_ADJUST_INTERVAL, FULL_TICK_CACHE_ENABLED, FULL_TICK_DEMAND_TTL_SECONDS, FULL_TICK_CACHE_TTL_SECONDS, FULL_TICK_REFRESH_INTERVAL_SECONDS, FULL_TICK_MARKET_REFRESH_INTERVAL_SECONDS, FULL_TICK_REFRESH_MAX_WALL_SECONDS, FULL_TICK_MAX_REQUESTS, RPC_TRANSPORT, RPC_ZMQ_CONFIG, RPC_MYSQL_CONFIG, RPC_PIPE_CONFIG, QUOTE_PUSH_CONFIG, DOWNLOAD_JOBS_ENABLED, DOWNLOAD_JOB_CHUNK_SIZE, DOWNLOAD_JOB_MAX_WALL_SECONDS, DOWNLOAD_JOB_TTL_SECONDS, EXEC_EVENTS_ENABLED, EXEC_EVENTS_DEBUG_RAW_FIELDS, EXEC_EVENTS_HOLD_PRESYSID_SECONDS, RPC_BACKGROUND_THREADS_EXPLICIT, RPC_DRAIN_BUDGET_SECONDS, RPC_HEAVY_OFFLOAD, RPC_HEAVY_CODES_THRESHOLD, REDIS_ENABLED_EXPLICIT, RPC_NATIVE_XTDATA_ENABLED, RPC_ORDER_SETTLE_TIMEOUT_SECONDS
     redis_config = dict(redis_config or {})
+    ORDER_IDENTITY_CONFIG = {key: redis_config[key] for key in
+                             ("order_identity_dir", "order_identity_pipe")
+                             if key in redis_config}
     RPC_BACKGROUND_THREADS_EXPLICIT = "rpc_background_threads" in redis_config
     REDIS_ENABLED_EXPLICIT = "redis_enabled" in redis_config
     if redis_config.get("native_xtdata_enabled") is not None:

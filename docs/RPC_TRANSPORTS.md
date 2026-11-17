@@ -124,6 +124,46 @@ Redis 读取；仅切换通道无法解决 QMT 内置 Redis 的 `Sensitive Data 
 
 ## 各传输说明
 
+### External order-identity persistence for restricted QMT terminals
+
+When QMT blocks journal file access, run the identity service in **external
+Python**, on the same Windows host:
+
+```powershell
+python -m bigqmt_signal_trader.order_identity_pipe --account-id YOUR_ACCOUNT --database D:\data\order_identity.sqlite
+```
+
+Configure the QMT bridge's `BIGQMT_REDIS_CONFIG` with:
+
+```python
+'order_identity_pipe': {'pipe_name': 'bigqmt_identity', 'timeout_seconds': 3.0}
+```
+
+This replaces the local journal for Redis-free bridges. QMT uses a separate
+named pipe; only the external process imports SQLite and opens the database.
+The database isolates account/type/remark, retains seven days, and restores up
+to 5,000 recent mappings. The first nonempty strategy name wins. Each successful
+write response follows a transaction commit with SQLite `synchronous=FULL`.
+
+Start the service before the bridge. Startup recovery failure prevents bridge
+initialization; a later persistence failure prevents the standard `order_stock` /
+`submit_order` path from calling the order gateway. Queries remain available
+using recovered in-memory ownership. Raw native `passorder` passthrough remains
+outside this attribution path. Timeouts can leave a saved identity without an
+order; this is harmless and must never be interpreted as proof of submission.
+The service cannot submit or replay orders.
+
+Keep one service per account/pipe. Preserve the SQLite database when moving the
+terminal. Start it again after Windows restarts; restarting a QMT model alone
+does not stop the external service. Existing blocked/unsaved journal records
+are not automatically recovered or inferred. `probe_order_identity` reports
+the external pipe in `local_persistence_directory` for compatibility, and its
+last error in `local_persistence_error`.
+
+Rebuild the single-file QMT bundle from the modified source and reload the QMT
+model to activate the backend. Replacing the source file does not change code
+already running in QMT.
+
 ### Redis（`transport: redis`，默认）
 
 完全保持原有行为：
